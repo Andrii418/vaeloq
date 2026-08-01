@@ -1,6 +1,7 @@
 // lib/embeddings.ts
 
 import { GoogleGenAI } from "@google/genai";
+import { supabaseAdmin } from "./supabase";
 
 // Tworzymy jeden, współdzielony klient Gemini dla całej aplikacji.
 // Automatycznie odczytuje klucz ze zmiennej środowiskowej GEMINI_API_KEY.
@@ -46,4 +47,45 @@ export async function generateEmbedding(
   }
 
   return values;
+}
+
+/**
+ * Kształt pojedynczego fragmentu zwróconego przez wyszukiwanie wektorowe.
+ */
+export interface RetrievedChunk {
+  id: string;
+  document_name: string;
+  content: string;
+  chunk_index: number;
+  similarity: number;
+}
+
+/**
+ * Wyszukuje fragmenty dokumentów najbardziej pasujące znaczeniowo do
+ * podanego pytania.
+ *
+ * To jest właśnie "Retrieval" w RAG:
+ * 1. Zamieniamy pytanie usera na wektor (tym samym modelem co dokumenty,
+ *    ale z innym taskType — "RETRIEVAL_QUERY" zamiast "RETRIEVAL_DOCUMENT",
+ *    bo Gemini inaczej interpretuje "pytanie" niż "treść do zapisania").
+ * 2. Prosimy Supabase (funkcję SQL match_documents) o N fragmentów
+ *    o najbardziej podobnym wektorze.
+ */
+export async function retrieveRelevantChunks(
+  question: string,
+  matchCount: number = 5
+): Promise<RetrievedChunk[]> {
+  const queryEmbedding = await generateEmbedding(question, "RETRIEVAL_QUERY");
+
+  const { data, error } = await supabaseAdmin.rpc("match_documents", {
+    query_embedding: queryEmbedding,
+    match_count: matchCount,
+  });
+
+  if (error) {
+    console.error("Błąd wyszukiwania wektorowego:", error);
+    throw new Error("Nie udało się wyszukać fragmentów dokumentu.");
+  }
+
+  return data as RetrievedChunk[];
 }
