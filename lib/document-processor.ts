@@ -1,6 +1,7 @@
 // lib/document-processor.ts
 
 // Importujemy klasę PDFParse — to nowe API biblioteki pdf-parse (wersja 2.x)
+import "pdf-parse/worker";
 import { PDFParse } from "pdf-parse";
 
 /**
