@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   // pdf-parse/pdfjs-dist wewnętrznie szuka pliku "workera" na dysku —
   // proces pakowania Next.js gubi ten plik po drodze, co powoduje błąd
   // "Setting up fake worker failed".
-  serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
 };
 
 export default nextConfig;
