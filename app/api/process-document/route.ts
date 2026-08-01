@@ -2,8 +2,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { extractTextFromPDF, chunkText } from "@/lib/document-processor";
+import { generateEmbedding } from "@/lib/embeddings";
+import { supabaseAdmin } from "@/lib/supabase";
 
-// Ten endpoint obsługuje żądania POST wysyłane na adres /api/process-document
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -29,14 +30,40 @@ export async function POST(request: NextRequest) {
     // Krok 1: wyciągamy tekst z PDF-a
     const fullText = await extractTextFromPDF(buffer);
 
-    // Krok 2: dzielimy tekst na fragmenty
-    const chunks = chunkText(fullText, 1000, 200);
+    // Krok 2: dzielimy tekst na fragmenty, respektując granice zdań
+    // (1000 znaków docelowo na fragment, 2 zdania zachodzenia na kolejny)
+    const chunks = chunkText(fullText, 1000, 2);
+
+    // Krok 3: dla KAŻDEGO fragmentu generujemy embedding i zapisujemy do bazy
+    const savedChunks = [];
+
+    for (const chunk of chunks) {
+      const embedding = await generateEmbedding(chunk.content, "RETRIEVAL_DOCUMENT");
+
+      const { data, error } = await supabaseAdmin
+        .from("document_chunks")
+        .insert({
+          document_name: file.name,
+          content: chunk.content,
+          chunk_index: chunk.index,
+          embedding: embedding,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Błąd zapisu do Supabase:", error);
+        throw new Error(`Nie udało się zapisać fragmentu #${chunk.index}`);
+      }
+
+      savedChunks.push(data);
+    }
 
     return NextResponse.json({
       fileName: file.name,
       totalCharacters: fullText.length,
-      chunksCount: chunks.length,
-      chunks: chunks,
+      chunksCount: savedChunks.length,
+      chunks: savedChunks,
     });
   } catch (error) {
     console.error("Błąd przetwarzania dokumentu:", error);

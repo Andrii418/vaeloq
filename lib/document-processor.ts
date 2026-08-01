@@ -8,16 +8,9 @@ import { PDFParse } from "pdf-parse";
  * "Buffer" to surowe bajty pliku — tak przesyła się pliki po sieci.
  */
 export async function extractTextFromPDF(buffer: Buffer): Promise<string> {
-  // Tworzymy nowy "parser" wskazując mu dane pliku
   const parser = new PDFParse({ data: buffer });
-
-  // getText() zwraca obiekt z tekstem każdej strony osobno
-  // oraz polem `text` — całym dokumentem połączonym w jeden string
   const result = await parser.getText();
-
-  // Zwalniamy zasoby użyte przez parser (dobra praktyka pamięciowa)
   await parser.destroy();
-
   return result.text;
 }
 
@@ -32,7 +25,30 @@ export interface DocumentChunk {
 }
 
 /**
- * Dzieli długi tekst na mniejsze fragmenty (chunki).
+ * Dzieli tekst na "zdania" — a właściwie na naturalne fragmenty logiczne.
+ * Dzielimy najpierw po nowych liniach (naturalne granice w formularzach,
+ * tabelkach, biletach, listach), a w obrębie każdej linii dodatkowo po
+ * kropce/wykrzykniku/pytajniku (naturalne granice w tekście pisanym prozą).
+ */
+function splitIntoSentences(text: string): string[] {
+  const lines = text.split(/\n+/).filter((l) => l.trim().length > 0);
+
+  const sentences: string[] = [];
+  for (const line of lines) {
+    const found = line.match(/[^.!?]+[.!?]+(\s|$)/g);
+    if (found) {
+      sentences.push(...found.map((s) => s.trim()));
+    } else {
+      sentences.push(line.trim());
+    }
+  }
+
+  return sentences.length > 0 ? sentences : [text];
+}
+
+/**
+ * Dzieli długi tekst na mniejsze fragmenty (chunki), respektując granice
+ * zdań/linii, żeby nie ucinać myśli w połowie.
  *
  * DLACZEGO TO ROBIMY (kluczowe dla RAG):
  * 1. Modele AI mają ograniczony "kontekst" — nie możemy wrzucić całej
@@ -40,38 +56,55 @@ export interface DocumentChunk {
  * 2. Wyszukiwanie wektorowe działa najlepiej na małych, spójnych
  *    kawałkach tekstu — cały dokument "rozmywa" znaczenie, mały fragment
  *    (np. jeden akapit o konkretnym temacie) jest precyzyjny.
- * 3. Dzięki temu, gdy user zada pytanie, znajdziemy dokładnie TEN
- *    fragment, który zawiera odpowiedź — zamiast całego, wielostronicowego
- *    dokumentu.
+ * 3. Fragment urwany w połowie zdania ma GORSZY embedding — model trudniej
+ *    "rozumie" niedokończoną myśl. Dlatego tniemy na granicy linii/zdania,
+ *    nigdy w środku słowa czy zdania.
  *
  * @param text - pełny tekst dokumentu
- * @param chunkSize - docelowa długość jednego fragmentu (w znakach)
- * @param overlap - ile znaków fragmenty mają na siebie "zachodzić"
- *                  (żeby zdanie przecięte na granicy nie straciło sensu)
+ * @param chunkSize - docelowa (nie sztywna!) długość fragmentu w znakach
+ * @param overlapSentences - ile ostatnich "zdań" poprzedniego fragmentu
+ *                            powtórzyć na początku następnego (kontekst)
  */
 export function chunkText(
   text: string,
   chunkSize: number = 1000,
-  overlap: number = 200
+  overlapSentences: number = 2
 ): DocumentChunk[] {
-  const cleanedText = text.replace(/\s+/g, " ").trim();
+  // Usuwamy tylko nadmiarowe spacje/tabulatory W LINII, ale zachowujemy
+  // podział na linie (\n) — to ważna informacja strukturalna dla
+  // dokumentów typu formularz/bilet/tabela
+  const cleanedText = text.replace(/[ \t]+/g, " ").trim();
+  const sentences = splitIntoSentences(cleanedText);
 
   const chunks: DocumentChunk[] = [];
-  let startIndex = 0;
+  let currentSentences: string[] = [];
+  let currentLength = 0;
   let chunkIndex = 0;
 
-  while (startIndex < cleanedText.length) {
-    const endIndex = Math.min(startIndex + chunkSize, cleanedText.length);
-    const chunkContent = cleanedText.slice(startIndex, endIndex);
+  for (const sentence of sentences) {
+    if (currentLength + sentence.length > chunkSize && currentSentences.length > 0) {
+      chunks.push({
+        id: `chunk-${chunkIndex}`,
+        content: currentSentences.join(" "),
+        index: chunkIndex,
+      });
+      chunkIndex++;
 
+      const overlap = currentSentences.slice(-overlapSentences);
+      currentSentences = [...overlap];
+      currentLength = overlap.join(" ").length;
+    }
+
+    currentSentences.push(sentence);
+    currentLength += sentence.length;
+  }
+
+  if (currentSentences.length > 0) {
     chunks.push({
       id: `chunk-${chunkIndex}`,
-      content: chunkContent,
+      content: currentSentences.join(" "),
       index: chunkIndex,
     });
-
-    chunkIndex++;
-    startIndex += chunkSize - overlap;
   }
 
   return chunks;

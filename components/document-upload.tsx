@@ -9,7 +9,7 @@ import { UploadCloud, FileText, Loader2 } from "lucide-react";
 interface DocumentChunk {
   id: string;
   content: string;
-  index: number;
+  chunk_index: number;
 }
 
 export function DocumentUpload() {
@@ -103,7 +103,7 @@ export function DocumentUpload() {
                 className="p-4 bg-zinc-900/70 border-zinc-800"
               >
                 <p className="text-xs text-zinc-500 mb-1">
-                  Fragment #{chunk.index + 1}
+                  Fragment #{chunk.chunk_index + 1}
                 </p>
                 <p className="text-sm text-zinc-300 line-clamp-3">
                   {chunk.content}
