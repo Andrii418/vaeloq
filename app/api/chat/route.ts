@@ -1,46 +1,66 @@
 // app/api/chat/route.ts
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { retrieveRelevantChunks } from "@/lib/embeddings";
 
 const ai = new GoogleGenAI({});
 
 export async function POST(request: NextRequest) {
-  try {
-    const { question } = await request.json();
+  const { question } = await request.json();
 
-    if (!question || typeof question !== "string") {
-      return NextResponse.json(
-        { error: "Nie podano pytania." },
-        { status: 400 }
-      );
-    }
+  if (!question || typeof question !== "string") {
+    return new Response(JSON.stringify({ error: "Nie podano pytania." }), {
+      status: 400,
+    });
+  }
 
-    // KROK 1 — RETRIEVAL: znajdź fragmenty dokumentu najbardziej
-    // pasujące znaczeniowo do pytania użytkownika
-    const relevantChunks = await retrieveRelevantChunks(question, 5);
+  const encoder = new TextEncoder();
 
-    if (relevantChunks.length === 0) {
-      return NextResponse.json({
-        answer: "Nie znalazłem żadnych dokumentów w bazie. Wgraj najpierw plik PDF.",
-        sources: [],
-      });
-    }
+  // Tworzymy strumień (ReadableStream) — zamiast jednej dużej odpowiedzi
+  // JSON, wysyłamy do przeglądarki wiele małych "linijek" danych,
+  // jedna po drugiej, w miarę jak są gotowe.
+  const stream = new ReadableStream({
+    async start(controller) {
+      // Pomocnicza funkcja: wysyła jeden obiekt jako linijkę JSON
+      function send(payload: object) {
+        controller.enqueue(encoder.encode(JSON.stringify(payload) + "\n"));
+      }
 
-    // KROK 2 — AUGMENTATION: budujemy kontekst z znalezionych fragmentów,
-    // każdy oznaczony numerem, żeby model mógł się do niego odwołać
-    // (cytowanie źródła)
-    const context = relevantChunks
-      .map(
-        (chunk, i) =>
-          `[Fragment ${i + 1}, dokument: "${chunk.document_name}"]\n${chunk.content}`
-      )
-      .join("\n\n");
+      try {
+        // KROK 1 — RETRIEVAL
+        const relevantChunks = await retrieveRelevantChunks(question, 5);
 
-    // Prompt instruujący model: odpowiadaj TYLKO na podstawie kontekstu,
-    // cytuj numer fragmentu, przyznaj się gdy nie wiesz
-    const prompt = `Jesteś asystentem odpowiadającym na pytania wyłącznie na podstawie poniższych fragmentów dokumentu.
+        if (relevantChunks.length === 0) {
+          send({ type: "sources", sources: [] });
+          send({
+            type: "chunk",
+            text: "Nie znalazłem żadnych dokumentów w bazie. Wgraj najpierw plik PDF.",
+          });
+          send({ type: "done" });
+          controller.close();
+          return;
+        }
+
+        // Wysyłamy źródła OD RAZU, zanim model zacznie generować tekst —
+        // dzięki temu interfejs może pokazać "z czego korzystam" natychmiast
+        const sources = relevantChunks.map((chunk, i) => ({
+          label: `Fragment ${i + 1}`,
+          documentName: chunk.document_name,
+          content: chunk.content,
+          similarity: chunk.similarity,
+        }));
+        send({ type: "sources", sources });
+
+        // KROK 2 — AUGMENTATION
+        const context = relevantChunks
+          .map(
+            (chunk, i) =>
+              `[Fragment ${i + 1}, dokument: "${chunk.document_name}"]\n${chunk.content}`
+          )
+          .join("\n\n");
+
+        const prompt = `Jesteś asystentem odpowiadającym na pytania wyłącznie na podstawie poniższych fragmentów dokumentu.
 
 ZASADY:
 - Odpowiadaj TYLKO na podstawie podanego kontekstu poniżej.
@@ -54,26 +74,29 @@ ${context}
 PYTANIE UŻYTKOWNIKA:
 ${question}`;
 
-    // KROK 3 — GENERATION: pytamy model Gemini, dając mu kontekst
-    const interaction = await ai.interactions.create({
-      model: "gemini-3.5-flash",
-      input: prompt,
-    });
+        // KROK 3 — GENERATION, w trybie strumieniowym
+        const responseStream = await ai.models.generateContentStream({
+          model: "gemini-3.5-flash",
+          contents: prompt,
+        });
 
-    return NextResponse.json({
-      answer: interaction.output_text,
-      sources: relevantChunks.map((chunk, i) => ({
-        label: `Fragment ${i + 1}`,
-        documentName: chunk.document_name,
-        content: chunk.content,
-        similarity: chunk.similarity,
-      })),
-    });
-  } catch (error) {
-    console.error("Błąd generowania odpowiedzi:", error);
-    return NextResponse.json(
-      { error: "Nie udało się wygenerować odpowiedzi." },
-      { status: 500 }
-    );
-  }
+        for await (const chunk of responseStream) {
+          if (chunk.text) {
+            send({ type: "chunk", text: chunk.text });
+          }
+        }
+
+        send({ type: "done" });
+      } catch (error) {
+        console.error("Błąd streamingu odpowiedzi:", error);
+        send({ type: "error", message: "Wystąpił błąd podczas generowania odpowiedzi." });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
 }
