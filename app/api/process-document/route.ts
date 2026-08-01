@@ -1,5 +1,5 @@
 // app/api/process-document/route.ts
-
+export const maxDuration = 60; // sekundy — maksymalny czas wykonania tego endpointu
 import { NextRequest, NextResponse } from "next/server";
 import { extractTextFromPDF, chunkText } from "@/lib/document-processor";
 import { generateEmbedding } from "@/lib/embeddings";
@@ -34,29 +34,32 @@ export async function POST(request: NextRequest) {
     // (1000 znaków docelowo na fragment, 2 zdania zachodzenia na kolejny)
     const chunks = chunkText(fullText, 1000, 2);
 
-    // Krok 3: dla KAŻDEGO fragmentu generujemy embedding i zapisujemy do bazy
-    const savedChunks = [];
+    // Krok 3: generujemy embeddingi dla wszystkich fragmentów RÓWNOLEGLE
+    // (Promise.all zamiast pętli for...of) — kluczowe dla wdrożenia na
+    // Vercel, gdzie darmowy plan ma limit 10 sekund na jedno żądanie.
+    // Przy dłuższych dokumentach sekwencyjne przetwarzanie (jeden po
+    // drugim) łatwo przekroczyłoby ten limit.
+    const embeddings = await Promise.all(
+      chunks.map((chunk) => generateEmbedding(chunk.content, "RETRIEVAL_DOCUMENT"))
+    );
 
-    for (const chunk of chunks) {
-      const embedding = await generateEmbedding(chunk.content, "RETRIEVAL_DOCUMENT");
+    // Zapis do bazy też robimy jedną, zbiorczą operacją zamiast N osobnych
+    // zapytań — szybciej i bardziej niezawodnie
+    const rowsToInsert = chunks.map((chunk, i) => ({
+      document_name: file.name,
+      content: chunk.content,
+      chunk_index: chunk.index,
+      embedding: embeddings[i],
+    }));
 
-      const { data, error } = await supabaseAdmin
-        .from("document_chunks")
-        .insert({
-          document_name: file.name,
-          content: chunk.content,
-          chunk_index: chunk.index,
-          embedding: embedding,
-        })
-        .select()
-        .single();
+    const { data: savedChunks, error } = await supabaseAdmin
+      .from("document_chunks")
+      .insert(rowsToInsert)
+      .select();
 
-      if (error) {
-        console.error("Błąd zapisu do Supabase:", error);
-        throw new Error(`Nie udało się zapisać fragmentu #${chunk.index}`);
-      }
-
-      savedChunks.push(data);
+    if (error) {
+      console.error("Błąd zapisu do Supabase:", error);
+      throw new Error("Nie udało się zapisać fragmentów dokumentu.");
     }
 
     return NextResponse.json({
