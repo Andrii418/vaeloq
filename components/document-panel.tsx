@@ -58,7 +58,7 @@ export function DocumentPanel({ onProcessed }: DocumentPanelProps) {
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="glass-panel rounded-2xl p-12 text-center max-w-sm"
+            className="glass-panel rounded-2xl p-6 sm:p-12 text-center max-w-sm w-full"
           >
             <UploadCloud className="w-10 h-10 text-indigo-400 mx-auto mb-4" />
             <p className="text-zinc-300 mb-1 font-medium">Wgraj dokument</p>

@@ -152,7 +152,7 @@ export function ChatPanel({ documentReady }: ChatPanelProps) {
                 </div>
               )}
 
-              <div className={`max-w-[80%] ${message.role === "user" ? "order-1" : ""}`}>
+              <div className={`max-w-[88%] sm:max-w-[80%] ${message.role === "user" ? "order-1" : ""}`}>
                 <div
                   className={
                     message.role === "user"
