@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Vaeloq
 
-## Getting Started
+An AI assistant that reads PDF documents and answers questions about them — built with a full RAG (Retrieval-Augmented Generation) pipeline.
 
-First, run the development server:
+Upload a PDF, ask a question in plain language, and get an answer based only on what's actually written in the document — with the source fragment cited, so you can check it yourself.
+
+**[Live Demo →](https://vaeloq.vercel.app/)**
+
+
+## Why I built this
+
+I wanted to understand how tools like ChatPDF and NotebookLM actually work under the hood, not just use them. So I built one myself — full stack, from PDF parsing to vector search to a streaming chat UI.
+
+## Tech Stack
+
+**Frontend** — Next.js 16 (App Router, TypeScript), Tailwind CSS, Framer Motion, Shadcn UI
+
+**Backend** — Next.js API Routes, Google Gemini API (generation + embeddings), Supabase (PostgreSQL + pgvector)
+
+**Deployment** — Vercel
+
+## How it works
+
+1. **Read the PDF.** The uploaded file is parsed and its text extracted.
+2. **Split it into chunks.** The text is broken into smaller pieces along natural sentence and line breaks — not cut off mid-word.
+3. **Turn each chunk into a vector.** Every chunk is converted into a list of numbers (an embedding) that represents its meaning, using Gemini's embedding model. These are stored in Supabase.
+4. **Search by meaning, not keywords.** When you ask a question, it's converted into a vector too, and the database finds the chunks whose meaning is closest to it — even if they don't share any exact words.
+5. **Answer with context.** Those chunks are handed to Gemini along with your question, and it generates an answer grounded in that specific text — streamed back live, word by word, with a citation showing which fragment it used.
+
+## Running it locally
+
+```bash
+git clone https://github.com/Andrii418/vaeloq
+cd vaeloq
+npm install
+```
+
+Create a `.env.local` file in the project root with your own keys:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_publishable_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_secret_key
+```
+
+Then set up the database — run `supabase/schema.sql` in your Supabase project's SQL Editor. It creates the table, enables `pgvector`, and adds the search function.
+
+Start the app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Project structure
+```
+├── app/
+│ ├── api/
+│ │ ├── process-document/ PDF parsing, chunking, embedding, storage
+│ │ └── chat/ RAG search + streaming answer
+│ └── page.tsx Split-screen layout
+├── components/
+│ ├── document-panel.tsx Upload + PDF preview
+│ └── chat-panel.tsx Chat UI with streaming responses
+├── lib/
+│ ├── document-processor.ts Text extraction + chunking
+│ ├── embeddings.ts Embeddings + vector search
+│ └── supabase.ts Database client
+└── supabase/
+└── schema.sql Database setup script
+```
